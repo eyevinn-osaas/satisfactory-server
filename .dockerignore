@@ -1,0 +1,9 @@
+.git
+.github
+*.md
+!README-OSC.md
+.vscode
+server.log
+saveshare
+cluster
+docker-compose.yml

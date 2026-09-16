@@ -1,0 +1,89 @@
+# Dockerfile.osc — Eyevinn Open Source Cloud (OSC) adaptation of the
+# Satisfactory dedicated server image.
+#
+# NOTE ON PORTS: This is a raw game-protocol server, not an HTTP service, so
+# the platform's usual "listen on $PORT over HTTP, expose 8080" convention
+# does not apply here. We keep the project's real ports exposed instead:
+#   - SERVERGAMEPORT (default 7777, TCP+UDP): main game traffic
+#   - SERVERMESSAGINGPORT (default 8888, TCP): messaging/reliable + HTTPS mgmt API
+# osc-entrypoint.sh maps OSC's $PORT (when provided) onto SERVERGAMEPORT as a
+# best-effort integration with OSC's standard port convention. Whether OSC's
+# service-instance networking model supports exposing multiple raw TCP/UDP
+# ports (beyond the primary $PORT) is unconfirmed at the time of writing —
+# see the comments in osc-entrypoint.sh for details. This is a known
+# platform-capability question, not a bug in this Dockerfile.
+#
+# This Dockerfile.osc is additive: it does not modify or replace the
+# project's original Dockerfile, init.sh, or run.sh. It simply layers the
+# OSC entrypoint on top of the existing, unmodified entrypoint chain
+# (init.sh -> gosu steam -> run.sh -> FactoryServer.sh), preserving all
+# UID/GID handling, signal propagation (STOPSIGNAL SIGINT) and the existing
+# HEALTHCHECK.
+
+FROM steamcmd/steamcmd:ubuntu-22
+
+ARG GID=1000
+ARG UID=1000
+
+ENV AUTOSAVENUM="5" \
+    DEBIAN_FRONTEND="noninteractive" \
+    DEBUG="false" \
+    DISABLESEASONALEVENTS="false" \
+    GAMECONFIGDIR="/config/gamefiles/FactoryGame/Saved" \
+    GAMESAVESDIR="/home/steam/.config/Epic/FactoryGame/Saved/SaveGames" \
+    LOG="false" \
+    MAXOBJECTS="2162688" \
+    MAXPLAYERS="4" \
+    MAXTICKRATE="30" \
+    MULTIHOME="::" \
+    PGID="1000" \
+    PUID="1000" \
+    SERVERGAMEPORT="7777" \
+    SERVERMESSAGINGPORT="8888" \
+    SERVERSTREAMING="true" \
+    SKIPUPDATE="false" \
+    STEAMAPPID="1690800" \
+    STEAMBETA="false" \
+    STEAMBETAID="" \
+    STEAMBETAKEY="" \
+    TIMEOUT="30" \
+    VMOVERRIDE="true"
+
+# hadolint ignore=DL3008
+# Base image steamcmd/steamcmd:ubuntu-22 already ships bash (Ubuntu 22.04),
+# which osc-entrypoint.sh requires. No extra package needed for that; the
+# rest of this RUN block mirrors the project's original Dockerfile setup.
+RUN set -x \
+ && apt-get update \
+ && apt-get install -y gosu xdg-user-dirs curl jq tzdata --no-install-recommends \
+ && rm -rf /var/lib/apt/lists/* \
+ && groupadd -g ${GID} steam \
+ && useradd -u ${UID} -g ${GID} -ms /bin/bash steam \
+ && mkdir -p /home/steam/.local/share/Steam/ \
+ && cp -R /root/.local/share/Steam/steamcmd/ /home/steam/.local/share/Steam/steamcmd/ \
+ && chown -R ${UID}:${GID} /home/steam/.local/ \
+ && gosu nobody true
+
+RUN mkdir -p /config \
+ && chown steam:steam /config
+
+COPY init.sh /
+COPY --chown=steam:steam healthcheck.sh run.sh /home/steam/
+COPY --chmod=755 osc-entrypoint.sh /usr/local/bin/osc-entrypoint.sh
+
+RUN chmod +x /init.sh /home/steam/healthcheck.sh /home/steam/run.sh
+
+HEALTHCHECK --timeout=30s --start-period=300s CMD bash /home/steam/healthcheck.sh
+
+WORKDIR /config
+ARG VERSION="DEV"
+ENV VERSION=$VERSION
+LABEL version=$VERSION
+STOPSIGNAL SIGINT
+
+# Real ports for this workload (not the generic OSC 8080/HTTP convention —
+# see note at top of file).
+EXPOSE 7777/udp 7777/tcp 8888/tcp
+
+ENTRYPOINT ["/usr/local/bin/osc-entrypoint.sh"]
+CMD ["/init.sh"]
